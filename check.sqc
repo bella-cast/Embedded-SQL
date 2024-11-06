@@ -1,0 +1,188 @@
+#include <stdio.h>
+#include <string.h>
+#include "util.h"
+#include <stdlib.h>
+
+EXEC SQL INCLUDE SQLCA;
+
+int main() {
+
+    EXEC SQL BEGIN DECLARE SECTION;
+        char professor_name[31];
+        char course_number[6];
+        char term[6];
+        int officehourexcept = 0;
+
+        char student_name[31]; 
+        int student_snum;
+        char current_cnum[6];
+        int current_section;
+        char section_list[50];  
+        char most_recent_term[6];
+        int enrollmentexcept = 0;
+
+        char ambig_name[31];
+        int nameexcept = 0;
+
+        char db[10] = "CS348";
+    EXEC SQL END DECLARE SECTION;
+
+    EXEC SQL CONNECT TO :db;
+
+    EXEC SQL DECLARE cur1 CURSOR FOR 
+        SELECT professor.name, officehour.cnum, officehour.term
+        FROM officehour
+        JOIN professor ON professor.pnum = officehour.pnum
+        LEFT JOIN class ON officehour.pnum = class.pnum AND officehour.cnum = class.cnum AND officehour.term = class.term
+        WHERE class.cnum IS NULL;
+
+    EXEC SQL OPEN cur1;
+    EXEC SQL WHENEVER NOT FOUND GO TO end;
+    EXEC SQL WHENEVER SQLERROR GO TO error;
+
+    for(;;){
+        EXEC SQL FETCH cur1 INTO :professor_name, :course_number, :term;
+        if (!officehourexcept){
+            printf("Office hour exception(s):\n");
+            officehourexcept = 1;
+        }
+        printf("%-30s %5s %5s\n", professor_name, course_number, term);
+    };
+
+    end:
+        EXEC SQL CLOSE cur1;
+     
+
+    EXEC SQL SELECT term INTO :most_recent_term FROM enrollment
+        ORDER BY SUBSTR(term, 2) DESC,
+            CASE SUBSTR(term, 1, 1)
+                WHEN 'F' THEN 3
+                WHEN 'S' THEN 2
+                ELSE 1
+            END DESC
+        FETCH FIRST 1 ROWS ONLY;
+    
+    EXEC SQL DECLARE cur2 CURSOR FOR 
+        SELECT student.snum, student.name, enrollment.cnum
+        FROM enrollment
+        JOIN student ON enrollment.snum = student.snum
+        WHERE enrollment.term = :most_recent_term
+        GROUP BY student.snum, student.name, enrollment.cnum
+        HAVING COUNT(DISTINCT enrollment.section) > 1;
+    
+    EXEC SQL OPEN cur2;
+    EXEC SQL WHENEVER NOT FOUND GO TO end2;
+    EXEC SQL WHENEVER SQLERROR GO TO error;
+
+    for(;;){
+        EXEC SQL FETCH cur2 INTO :student_snum, :student_name, :current_cnum;
+        strcpy(section_list, "");
+
+        EXEC SQL DECLARE cur3 CURSOR FOR 
+            SELECT enrollment.section FROM enrollment
+            WHERE enrollment.term = :most_recent_term
+            AND enrollment.cnum = :current_cnum AND enrollment.snum = :student_snum
+            ORDER BY enrollment.section;
+
+        EXEC SQL OPEN cur3;
+        EXEC SQL WHENEVER NOT FOUND GO TO end3;
+        EXEC SQL WHENEVER SQLERROR GO TO error;
+
+        for(;;) {
+            EXEC SQL FETCH cur3 INTO :current_section;
+            char section_str[5];
+            sprintf(section_str, " %d", current_section);
+            if (strlen(section_list) > 0) {
+                strcat(section_list, " ");
+            }
+            strcat(section_list, section_str);
+        }
+        end3:
+            EXEC SQL CLOSE cur3;
+
+        if (!enrollmentexcept){
+            printf("Enrollment ambiguity exception(s):\n");
+            enrollmentexcept = 1;
+        }
+        printf("%-30s %5s %s\n", student_name, current_cnum, section_list);
+    }
+
+    end2: 
+        EXEC SQL CLOSE cur2;
+
+    EXEC SQL DECLARE cur4 CURSOR FOR
+        SELECT student.name
+        FROM student
+        GROUP BY student.name
+        HAVING COUNT(*) > 1;
+    
+    EXEC SQL OPEN cur4;
+    EXEC SQL WHENEVER NOT FOUND GO TO end4;
+    EXEC SQL WHENEVER SQLERROR GO TO error;
+
+    for(;;){
+        EXEC SQL FETCH cur4 INTO :ambig_name;
+        if (!nameexcept){
+            printf("Name ambiguity exception(s):\n");
+            nameexcept = 1;
+        }
+        printf("%-30s (student)\n", ambig_name);
+    }
+
+    end4:
+        EXEC SQL CLOSE cur4;
+    
+    EXEC SQL DECLARE cur5 CURSOR FOR
+        SELECT professor.name
+        FROM professor
+        GROUP BY professor.name
+        HAVING COUNT(*) > 1;
+    
+    EXEC SQL OPEN cur5;
+    EXEC SQL WHENEVER NOT FOUND GO TO end5;
+    EXEC SQL WHENEVER SQLERROR GO TO error;
+
+    for(;;){
+        EXEC SQL FETCH cur5 INTO :ambig_name;
+        if (!nameexcept){
+            printf("Name ambiguity exception(s):\n");
+            nameexcept = 1;
+        }
+        printf("%-30s (professor)\n", ambig_name);
+    }
+
+    end5:
+        EXEC SQL CLOSE cur5;
+    
+    EXEC SQL DECLARE cur6 CURSOR FOR
+        SELECT professor.name
+        FROM professor
+        JOIN student on professor.name = student.name
+        GROUP BY professor.name;
+    
+    EXEC SQL OPEN cur6;
+    EXEC SQL WHENEVER NOT FOUND GO TO end6;
+    EXEC SQL WHENEVER SQLERROR GO TO error;
+
+    for(;;){
+        EXEC SQL FETCH cur6 INTO :ambig_name;
+        if (!nameexcept){
+            printf("Name ambiguity exception(s):\n");
+            nameexcept = 1;
+        }
+        printf("%-30s (student/professor)\n", ambig_name);
+    }
+
+    end6:
+        EXEC SQL CLOSE cur6;
+
+    EXEC SQL CONNECT RESET;
+    return 0;
+
+    error:
+        check_error("My error", &sqlca);
+        EXEC SQL WHENEVER SQLERROR CONTINUE;
+        EXEC SQL ROLLBACK;
+        EXEC SQL CONNECT reset;
+        exit(1);
+}
