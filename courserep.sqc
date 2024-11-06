@@ -1,0 +1,74 @@
+#include <stdio.h>
+#include <string.h>
+#include "util.h"
+#include <stdlib.h>
+
+EXEC SQL INCLUDE SQLCA;
+
+int main(int argc, char* argv[]){
+
+    EXEC SQL BEGIN DECLARE SECTION;
+    char db[10] = "CS348";
+    char course_rep[6];
+    char course_name[51];
+    char term[6];
+    int enrolled;
+    int nograde;
+    int avggrade;
+    char most_recent_term[6];
+    EXEC SQL END DECLARE SECTION;
+
+    EXEC SQL CONNECT TO :db;
+    
+    strncpy(course_rep, argv[1], 5);
+    course_rep[5] = '\0';
+    
+    EXEC SQL SELECT course.cname INTO :course_name
+        FROM course
+        WHERE course.cnum = :course_rep;
+    
+    course_name[50] = '\0';
+
+    printf("%-5s %-50s\n", course_rep, course_name);
+
+    EXEC SQL SELECT term INTO :most_recent_term FROM enrollment
+        ORDER BY SUBSTR(term, 2) DESC,
+            CASE SUBSTR(term, 1, 1)
+                WHEN 'F' THEN 3
+                WHEN 'S' THEN 2
+                ELSE 1
+            END DESC
+        FETCH FIRST 1 ROWS ONLY;
+    
+    EXEC SQL DECLARE cur1 CURSOR FOR
+        SELECT enrollment.term, COUNT(*) as totalstudents,
+        SUM(CASE WHEN enrollment.grade IS NULL THEN 1 ELSE 0 END) as gradenull,
+        FLOOR(SUM(CASE WHEN enrollment.grade IS NOT NULL THEN CAST(enrollment.grade AS FLOAT) ELSE 0 END) / 
+        SUM(CASE WHEN enrollment.grade IS NOT NULL THEN 1 ELSE 0 END) + 0.5) as avgrade
+        FROM enrollment
+        WHERE enrollment.cnum = :course_rep AND enrollment.term <> :most_recent_term
+        GROUP BY enrollment.term
+        ORDER BY enrollment.term;
+    
+    EXEC SQL OPEN cur1;
+    EXEC SQL WHENEVER NOT FOUND GO TO end;
+    EXEC SQL WHENEVER SQLERROR GO TO error;
+
+    for(;;){
+        EXEC SQL FETCH cur1 INTO :term, :enrolled, :nograde, :avggrade;
+        printf("%-5s %4d %3d %2d\n", term, enrolled, nograde, avggrade);
+    }
+
+    end:
+        EXEC SQL CLOSE cur1;
+    
+    EXEC SQL CONNECT RESET;
+    return 0;
+
+    error:
+        check_error("My error", &sqlca);
+        EXEC SQL WHENEVER SQLERROR CONTINUE;
+        EXEC SQL ROLLBACK;
+        EXEC SQL CONNECT reset;
+        exit(1);
+}
